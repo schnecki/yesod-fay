@@ -1,15 +1,15 @@
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE ViewPatterns          #-}
 {-# OPTIONS_GHC -fno-warn-orphans  #-}
 -- | Utility functions for using Fay from a Yesod application.
 --
@@ -81,9 +81,9 @@ module Yesod.Fay
     , YesodJquery (..)
     ) where
 
+import           Control.Applicative
 import           Control.Monad              (unless, when)
 import           Control.Monad.Loops        (anyM)
-import           Control.Applicative
 import           Data.Aeson                 (decode)
 import qualified Data.ByteString.Lazy       as L
 import qualified Data.ByteString.Lazy.UTF8  as BSU
@@ -94,49 +94,41 @@ import           Data.Default               (def)
 import           Data.Digest.Pure.MD5       (md5)
 import           Data.List                  (isPrefixOf)
 import           Data.Maybe                 (isNothing)
-import           Data.Monoid                ((<>), mempty)
+import           Data.Monoid                (mempty, (<>))
 import           Data.Text                  (pack, unpack)
 import qualified Data.Text                  as T
+import           Data.Text.Encoding         (encodeUtf8)
 import qualified Data.Text.IO               as T
 import qualified Data.Text.Lazy             as TL
-import           Data.Text.Encoding         (encodeUtf8)
-import qualified Data.Text.Lazy.Encoding as TLE
-import           Data.Text.Lazy.Builder     (fromText, toLazyText, Builder)
-import           System.Directory           (createDirectoryIfMissing, doesFileExist)
-import           System.FilePath            (takeDirectory)
+import           Data.Text.Lazy.Builder     (Builder, fromText, toLazyText)
+import qualified Data.Text.Lazy.Encoding    as TLE
 import           Fay                        (getRuntime, showCompileError)
 import           Fay.Convert                (showToFay)
+import           System.Directory           (createDirectoryIfMissing, doesFileExist)
+import           System.FilePath            (takeDirectory)
 #if MIN_VERSION_fay(0,20,0)
-import           Fay                        (Config(..),
+import           Fay                        (CompileError, CompileResult (..), Config (..),
                                              addConfigDirectoryIncludePaths,
-                                             addConfigPackages,
-                                             compileFileWithResult,
-                                             configDirectoryIncludes,
-                                             configTypecheck,
-                                             configExportRuntime,
-                                             configPrettyPrint,
-                                             defaultConfig,
-                                             CompileError,
-                                             CompileResult (..))
+                                             addConfigPackages, compileFileWithResult,
+                                             configDirectoryIncludes, configExportRuntime,
+                                             configPrettyPrint, configTypecheck,
+                                             defaultConfig)
 #else
-import           Fay                        (CompileState(..), compileFileWithState)
+import           Fay                        (CompileState (..), compileFileWithState)
 import           Fay.Compiler.Config        (addConfigDirectoryIncludePaths,
                                              addConfigPackages)
-import           Fay.Types                  (CompileConfig(..),
-                                             configDirectoryIncludes,
-                                             configTypecheck,
-                                             configExportRuntime,
-                                             configPrettyPrint,
-                                             CompileError)
+import           Fay.Types                  (CompileConfig (..), CompileError,
+                                             configDirectoryIncludes, configExportRuntime,
+                                             configPrettyPrint, configTypecheck)
 #endif
-import           Fay.Yesod         (Returns (Returns))
-import           Language.Haskell.TH.Syntax (Exp (LitE, AppE, VarE), Lit (StringL, StringPrimL, IntegerL), Name,
-                                             Q,
+import           Control.Exception          (IOException, catch)
+import           Data.ByteString.Unsafe     (unsafePackAddressLen)
+import           Data.Text.Encoding         (decodeUtf8)
+import           Fay.Yesod                  (Returns (Returns))
+import           Language.Haskell.TH.Syntax (Exp (AppE, LitE, VarE),
+                                             Lit (IntegerL, StringL, StringPrimL), Name, Q,
                                              qAddDependentFile, qRunIO)
-import           Data.Text.Encoding (decodeUtf8)
-import           Data.ByteString.Unsafe (unsafePackAddressLen)
-import           Control.Exception (IOException,catch)
-import           Prelude hiding (catch)
+import           Prelude                    hiding (catch)
 import           System.Directory
 import           System.Environment         (getEnvironment)
 import           Text.Julius                (Javascript (Javascript), julius)
@@ -196,7 +188,7 @@ type CommandHandler master
    -> Value
    -> HandlerT master IO s
 
--- | A setttings data type for indicating whether the generated Javascript
+-- | A settings data type for indicating whether the generated Javascript
 -- should contain a copy of the Fay runtime or not.
 data YesodFaySettings = YesodFaySettings
     { yfsModuleName      :: String
@@ -249,7 +241,7 @@ postFayCommandR =
             Nothing -> invalidArgs ["No JSON provided"]
             Just txt ->
                 case decode (L.fromChunks [encodeUtf8 txt]) of
-                    Nothing -> error $ "Unable to parse input: " ++ show txt
+                    Nothing  -> error $ "Unable to parse input: " ++ show txt
                     Just cmd -> f go cmd
       where
         go Returns value = do
@@ -336,7 +328,7 @@ compileFayFile fp conf = do
 getFileCache :: FilePath -> IO (Either (FilePath,FilePath) ([FilePath],String))
 getFileCache fp = do
   let dir = "dist/yesod-fay-cache/"
-      guid = show (md5 (BSU.fromString fp))
+      guid = show (base64md5 (BSU.fromString fp))
       fp_hi = dir ++ guid ++ ".hi"
       fp_o = dir ++ guid ++ ".o"
       refresh = return $ Left (fp_hi,fp_o)
@@ -468,7 +460,6 @@ throwFayError name e =
   error $ "Unable to compile Fay module \"" ++ name ++ "\":\n\n" ++ showCompileError e
 
 
-
 -- Fay cross-version compatible functions
 
 #if !MIN_VERSION_fay(0,20,0)
@@ -482,11 +473,11 @@ compile = compileFileWithState
 #endif
 
 #if MIN_VERSION_fay(0,20,0)
-sourceAndFiles res = (resOutput res,map snd (resImported res))
+sourceAndFiles res              = (resOutput res,map snd (resImported res))
 #else
 #if MIN_VERSION_fay(0,18,0)
 sourceAndFiles (source,_,state) = (source,map snd (stateImported state))
 #else
-sourceAndFiles (source,state) = (source,map snd (stateImported state))
+sourceAndFiles (source,state)   = (source,map snd (stateImported state))
 #endif
 #endif
