@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes   #-}
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
@@ -102,24 +103,29 @@ import qualified Data.Text.IO               as T
 import qualified Data.Text.Lazy             as TL
 import           Data.Text.Lazy.Builder     (Builder, fromText, toLazyText)
 import qualified Data.Text.Lazy.Encoding    as TLE
-import           Fay                        (getRuntime, showCompileError)
+#if MIN_VERSION_fay(0,24,0)
+import           Fay                        (readConfigRuntime, showCompileError)
+#else
+import           Fay                        (getConfigRuntime, getRuntime,
+                                             showCompileError)
+#endif
 import           Fay.Convert                (showToFay)
 import           System.Directory           (createDirectoryIfMissing, doesFileExist)
 import           System.FilePath            (takeDirectory)
-#if MIN_VERSION_fay(0,20,0)
+#if !MIN_VERSION_fay(0,20,0)
+import           Fay                        (CompileState (..), compileFileWithState)
+import           Fay.Config                 (addConfigDirectoryIncludePaths,
+                                             addConfigPackages, configDirectoryIncludes)
+import           Fay.Types                  (CompileConfig (..), CompileError,
+                                             configExportRuntime, configPrettyPrint,
+                                             configTypecheck)
+#else
 import           Fay                        (CompileError, CompileResult (..), Config (..),
                                              addConfigDirectoryIncludePaths,
                                              addConfigPackages, compileFileWithResult,
                                              configDirectoryIncludes, configExportRuntime,
                                              configPrettyPrint, configTypecheck,
                                              defaultConfig)
-#else
-import           Fay                        (CompileState (..), compileFileWithState)
-import           Fay.Compiler.Config        (addConfigDirectoryIncludePaths,
-                                             addConfigPackages)
-import           Fay.Types                  (CompileConfig (..), CompileError,
-                                             configDirectoryIncludes, configExportRuntime,
-                                             configPrettyPrint, configTypecheck)
 #endif
 import           Control.Exception          (IOException, catch)
 import           Data.ByteString.Unsafe     (unsafePackAddressLen)
@@ -133,6 +139,7 @@ import           System.Directory
 import           System.Environment         (getEnvironment)
 import           Text.Julius                (Javascript (Javascript), julius)
 import           Yesod.Core
+import           Yesod.Core.Handler         (HandlerT)
 import           Yesod.Fay.Data
 import           Yesod.Form.Jquery          (YesodJquery (..))
 import           Yesod.Static
@@ -218,10 +225,12 @@ yesodFaySettings moduleName = YesodFaySettings
     }
 
 updateRuntime :: FilePath -> IO ()
-updateRuntime fp = getRuntime >>= \js -> createDirectoryIfMissing True (takeDirectory fp) >> copyFile js fp
+updateRuntime fp = getRuntime' >>= \js -> createDirectoryIfMissing True (takeDirectory fp) >> copyFile js fp
 
+-- HandlerT FaySite (HandlerT master0 IO) Value
 instance YesodFay master => YesodSubDispatch FaySite (HandlerT master IO) where
-    yesodSubDispatch = $(mkYesodSubDispatch resourcesFaySite)
+  yesodSubDispatch = $(mkYesodSubDispatch resourcesFaySite)
+
 
 -- | To be used from your routing declarations.
 getFaySite :: a -> FaySite
@@ -286,7 +295,7 @@ requireFayRuntime settings = do
     case yfsSeparateRuntime settings of
         Nothing -> [| return () |]
         Just (_, exp') -> do
-            hash <- qRunIO $ getRuntime >>= fmap base64md5 . L.readFile
+            hash <- qRunIO $ getRuntime' >>= fmap base64md5 . L.readFile
             [| addScript ($(return exp') (StaticRoute ["fay-runtime.js"] [(T.pack hash, "")])) |]
 
 -- | A function that takes a String giving the Fay module name, and returns an
@@ -360,7 +369,10 @@ fayFileProdWithConfig modifier settings = do
     eres <- qRunIO $ compileFayFile fp
                    $ modifier
                    $ addConfigPackages packages
-                   $ config { configExportRuntime = exportRuntime }
+                   $ config { configExportRuntime = exportRuntime
+                            , configTypecheck     = True
+                            , configOptimize      = True
+                            }
     case eres of
         Left e -> throwFayError name e
         Right (modules,s) -> do
@@ -410,10 +422,41 @@ stringPrimL = StringPrimL . L.unpack . TLE.encodeUtf8
 config :: Config
 config = addConfigDirectoryIncludePaths ["fay", "fay-shared"]
 #if MIN_VERSION_fay(0,20,0)
-    defaultConfig
+  -- addConfigPackage "fay-base" $
+  -- Config
+  -- { configOptimize           = True
+  -- , configFlattenApps        = False
+  -- , configExportRuntime      = True
+  -- , configExportStdlib       = True
+  -- , configExportStdlibOnly   = False
+  -- , _configDirectoryIncludes = []
+  -- , configPrettyPrint        = False
+  -- , configHtmlWrapper        = False
+  -- , configHtmlJSLibs         = []
+  -- , configLibrary            = False
+  -- , configWarn               = True
+  -- , configFilePath           = Nothing
+  -- , configTypecheck          = True
+  -- , configWall               = False
+  -- , configGClosure           = False
+  -- , configPackageConf        = Nothing
+  -- , _configPackages          = []
+  -- , configBasePath           = Nothing
+  -- , configStrict             = []
+  -- , configTypecheckOnly      = False
+  -- , configRuntimePath        = Nothing
+  -- , configSourceMap          = False
+  -- , configOptimizeNewtypes   = True
+  -- , configPrettyThunks       = False
+  -- , configPrettyOperators    = False
+  -- , configShowGhcCalls       = False
+  -- , configTypeScript         = False
+  -- }
+  defaultConfig
 #else
     def
 #endif
+
 
 -- | Performs no type checking on the Fay code. Each time the widget is
 -- requested, the Fay code will be compiled from scratch to Javascript.
@@ -457,7 +500,7 @@ fayFileReloadWithConfig modifier settings = do
 -- | Throw a fay error.
 throwFayError :: String -> CompileError -> error
 throwFayError name e =
-  error $ "Unable to compile Fay module \"" ++ name ++ "\":\n\n" ++ showCompileError e
+  error $ "Unable to compile Fay module \"" ++ name ++ "\":\n\n" ++ showCompileError e ++ "\n\n"
 
 
 -- Fay cross-version compatible functions
@@ -481,3 +524,10 @@ sourceAndFiles (source,_,state) = (source,map snd (stateImported state))
 sourceAndFiles (source,state)   = (source,map snd (stateImported state))
 #endif
 #endif
+
+#if MIN_VERSION_fay(0,24,0)
+getRuntime' = readConfigRuntime config
+#else
+getRuntime' = getRuntime
+#endif
+
