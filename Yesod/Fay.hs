@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE QuasiQuotes           #-}
@@ -133,7 +134,7 @@ import           Data.Text.Encoding         (decodeUtf8)
 import           Fay.Yesod                  (Returns (Returns))
 import           Language.Haskell.TH.Syntax (Exp (AppE, LitE, VarE),
                                              Lit (IntegerL, StringL, StringPrimL), Name, Q,
-                                             qAddDependentFile, qRunIO)
+                                             mkName, qAddDependentFile, qRunIO)
 import           Prelude                    hiding (catch)
 import           System.Directory
 import           System.Environment         (getEnvironment)
@@ -221,7 +222,7 @@ yesodFaySettings moduleName = YesodFaySettings
     , yfsExternal = Nothing
     , yfsRequireJQuery = True
     , yfsPackages = ["fay-base"]
-    , yfsTypecheckDevel = False
+    , yfsTypecheckDevel = True
     }
 
 updateRuntime :: FilePath -> IO ()
@@ -423,20 +424,20 @@ config :: Config
 config = addConfigDirectoryIncludePaths ["fay", "fay-shared"]
 #if MIN_VERSION_fay(0,20,0)
   -- addConfigPackage "fay-base" $
-  -- Config
-  -- { configOptimize           = True
+  $ defaultConfig
+  { configOptimize           = True
   -- , configFlattenApps        = False
   -- , configExportRuntime      = True
   -- , configExportStdlib       = True
   -- , configExportStdlibOnly   = False
   -- , _configDirectoryIncludes = []
-  -- , configPrettyPrint        = False
+  , configPrettyPrint        = True
   -- , configHtmlWrapper        = False
   -- , configHtmlJSLibs         = []
   -- , configLibrary            = False
   -- , configWarn               = True
   -- , configFilePath           = Nothing
-  -- , configTypecheck          = True
+  , configTypecheck          = True
   -- , configWall               = False
   -- , configGClosure           = False
   -- , configPackageConf        = Nothing
@@ -449,10 +450,9 @@ config = addConfigDirectoryIncludePaths ["fay", "fay-shared"]
   -- , configOptimizeNewtypes   = True
   -- , configPrettyThunks       = False
   -- , configPrettyOperators    = False
-  -- , configShowGhcCalls       = False
+  , configShowGhcCalls       = False
   -- , configTypeScript         = False
-  -- }
-  defaultConfig
+  }
 #else
     def
 #endif
@@ -462,6 +462,7 @@ config = addConfigDirectoryIncludePaths ["fay", "fay-shared"]
 -- requested, the Fay code will be compiled from scratch to Javascript.
 fayFileReload :: YesodFaySettings -> Q Exp
 fayFileReload = fayFileReloadWithConfig 'id
+
 
 -- | Like 'fayFileReload', but also takes the name of a function used
 -- to modify the fay configuration can be modified.  The type of this
@@ -497,11 +498,11 @@ fayFileReloadWithConfig modifier settings = do
     packages = yfsPackages settings
     typecheckDevel = yfsTypecheckDevel settings
 
+
 -- | Throw a fay error.
 throwFayError :: String -> CompileError -> error
 throwFayError name e =
   error $ "Unable to compile Fay module \"" ++ name ++ "\":\n\n" ++ showCompileError e ++ "\n\n"
-
 
 -- Fay cross-version compatible functions
 
