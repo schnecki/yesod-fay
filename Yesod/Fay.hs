@@ -526,9 +526,9 @@ sourceAndFiles (source,state)   = (source,map snd (stateImported state))
 #endif
 #endif
 
-#if MIN_VERSION_fay(0,24,0)
-getRuntime' = readConfigRuntime config
-#else
+-- #if MIN_VERSION_fay(0,24,0)
+-- getRuntime' = readConfigRuntime config
+-- #else
 getRuntime' = getRuntime
-#endif
+-- #endif
 
